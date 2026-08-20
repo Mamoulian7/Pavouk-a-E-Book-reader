@@ -2,10 +2,10 @@
 // Koncept pro Arduino IDE
 
 // --- Nastavení Sítě a MQTT ---
-const char* WIFI_SSID = "Internet";
-const char* WIFI_PASS = "1234567890";
-const char* MQTT_USER = "mqtt";
-const char* MQTT_PASS = "admin";
+const char* WIFI_SSID = "xxxxx";
+const char* WIFI_PASS = "xxxxx";
+const char* MQTT_USER = "xxxxx";
+const char* MQTT_PASS = "xxxxxx";
 
 #include <Arduino.h>
 #include <GxEPD2_BW.h>   // Knihovna pro e-paper (přímá podpora Waveshare)
@@ -33,27 +33,27 @@ ViewState currentView = MENU;
 #define SD_SCK  18
 #define SD_MISO 19
 #define SD_MOSI 23
-#define SD_CS   21  // Původní pin 5 bránil startu (pull-up na modulu). Pin 15 má zabraný displej. 21 je 100% bezpečný!
+#define SD_CS   21  
 
 // 3. Hardware Piny
 // Hardwarové stránkovací tlačítka
-#define BTN_LEFT 2   // Vráceno na pin 2 (zde je fyzicky připojené)
+#define BTN_LEFT 2  
 #define BTN_RIGHT 12 
 
 // Piny pro LED
 
 
 // Piny Trackball modulu
-#define PIN_BTN 32 // Změněno z 22! Tlačítko BTN musí být na tzv. RTC pinu, aby umělo probudit ESP ze spánku! Pin 32 má i pull-up.
+#define PIN_BTN 32 
 #define PIN_RHT 33
-#define PIN_LFT 22 // Přesunuto z 32 (směry trackballu nemusí probouzet ze spánku)
+#define PIN_LFT 22 
 #define PIN_DWN 4
-#define PIN_UP  16 // Přesunuto z 2! Trackball na pinu 2 blokoval Boot režim (rozsvěcoval modrou LED)
-#define PIN_BATTERY 35 // Analogový pin pro měření napětí baterie
+#define PIN_UP  16 
+#define PIN_BATTERY 35 
 
 // RGBW LED na Trackballu (Modrou a bílou nezapojujeme)
-#define PIN_RED 5  // Zpět zapojeno na pin 5 (podsvícení zrušeno)
-#define PIN_GRN 17 // Přesunuto z 12, aby nám pin 12 (strapping) nedělal problémy při bootování
+#define PIN_RED 5  
+#define PIN_GRN 17 
 //#define PIN_BLU -1 
 //#define PIN_WHT -1
 
