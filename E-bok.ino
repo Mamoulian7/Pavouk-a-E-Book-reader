@@ -2,10 +2,10 @@
 // Koncept pro Arduino IDE
 
 // --- Nastavení Sítě a MQTT ---
-const char* WIFI_SSID = "xxxxx";
-const char* WIFI_PASS = "xxxxx";
-const char* MQTT_USER = "xxxxx";
-const char* MQTT_PASS = "xxxxxx";
+const char* WIFI_SSID = "Internet";
+const char* WIFI_PASS = "1234567890";
+const char* MQTT_USER = "mqtt";
+const char* MQTT_PASS = "admin";
 
 #include <Arduino.h>
 #include <GxEPD2_BW.h>   // Knihovna pro e-paper (přímá podpora Waveshare)
@@ -33,27 +33,27 @@ ViewState currentView = MENU;
 #define SD_SCK  18
 #define SD_MISO 19
 #define SD_MOSI 23
-#define SD_CS   21  
+#define SD_CS   21  // Původní pin 5 bránil startu (pull-up na modulu). Pin 15 má zabraný displej. 21 je 100% bezpečný!
 
 // 3. Hardware Piny
 // Hardwarové stránkovací tlačítka
-#define BTN_LEFT 2  
+#define BTN_LEFT 2   // Vráceno na pin 2 (zde je fyzicky připojené)
 #define BTN_RIGHT 12 
 
 // Piny pro LED
 
 
 // Piny Trackball modulu
-#define PIN_BTN 32 
+#define PIN_BTN 32 // Změněno z 22! Tlačítko BTN musí být na tzv. RTC pinu, aby umělo probudit ESP ze spánku! Pin 32 má i pull-up.
 #define PIN_RHT 33
-#define PIN_LFT 22 
+#define PIN_LFT 22 // Přesunuto z 32 (směry trackballu nemusí probouzet ze spánku)
 #define PIN_DWN 4
-#define PIN_UP  16 
-#define PIN_BATTERY 35 
+#define PIN_UP  16 // Přesunuto z 2! Trackball na pinu 2 blokoval Boot režim (rozsvěcoval modrou LED)
+#define PIN_BATTERY 35 // Analogový pin pro měření napětí baterie
 
 // RGBW LED na Trackballu (Modrou a bílou nezapojujeme)
-#define PIN_RED 5  
-#define PIN_GRN 17 
+#define PIN_RED 5  // Zpět zapojeno na pin 5 (podsvícení zrušeno)
+#define PIN_GRN 17 // Přesunuto z 12, aby nám pin 12 (strapping) nedělal problémy při bootování
 //#define PIN_BLU -1 
 //#define PIN_WHT -1
 
@@ -101,6 +101,7 @@ AppState currentState = STATE_MENU;
 bool lookupMode = false;
 int selectedWordIndex = 0;
 String lookupResult = "";
+int lookupScrollOffset = 0;
 
 String lookupWordWikipedia(String word); // Deklarace pro funkci dole
 
@@ -111,9 +112,9 @@ String lookupWord(String word) {
     
     // Rychlé připojení k naposledy použité Wi-Fi síti (neblokující)
     if (WiFi.status() != WL_CONNECTED) {
-        WiFi.begin(); // Použije uložené přihlašovací údaje
+        WiFi.begin(WIFI_SSID, WIFI_PASS); // Použije zadané přihlašovací údaje
         int retries = 0;
-        while (WiFi.status() != WL_CONNECTED && retries < 40) { // Max 4 vteřiny
+        while (WiFi.status() != WL_CONNECTED && retries < 80) { // Max 8 vteřin pro první připojení
             delay(100);
             retries++;
         }
@@ -121,14 +122,16 @@ String lookupWord(String word) {
     
     if (WiFi.status() == WL_CONNECTED) {
         String wiki = lookupWordWikipedia(word);
-        if (wiki != "Definice nenalezena.") return "Wiki: " + wiki;
+        if (wiki.startsWith("Nenalezeno") || wiki.startsWith("Slovo nenalezeno") || wiki.startsWith("Chyba")) return wiki;
+        return "Wiki: " + wiki;
     }
     
     return "Nenalezeno (Zkontrolujte Wi-Fi)";
 }
 
 // Proměnné pro knihovnu
-String fileList[10];
+const int MAX_FILES = 50;
+String fileList[MAX_FILES];
 int fileCount = 0;
 int selectedFileIndex = 0;
 
@@ -150,7 +153,7 @@ unsigned long ledOnTime = 0;
 
 String menuItems[] = {
   "1. Pokračovat ve čtení",
-  "2. Knihovna",
+  "2. Knihovna (SD karta)",
   "3. Wi-Fi a Web server",
   "4. Nastavení"
 };
@@ -162,16 +165,30 @@ bool displayNeedsUpdate = true; // Změněno na true! Musí se vykreslit první 
 unsigned long lastActivity = 0;
 String currentText = "Zapínám čtečku...";
 
-int activeFontType = 0; // 0 = Bezpatkové (Helvetica), 1 = Patkové (Times), 2 = Monospace (Courier)
+int activeFontType = 0; // 0 = Sans (Droid Sans / Helvetica), 1 = Serif Book (Droid Serif / Century Schoolbook), 2 = Times, 3 = Monospace (Courier)
 int activeFontSize = 12; // 12 nebo 14 pixelů
+
+// --- Nastavení okrajů displeje (Layout & Margins) ---
+// Pro nový 3D tištěný kryt s plně viditelnou plochou e-inku jsou okraje nastaveny na standardních 16px.
+// Hodnoty můžete kdykoliv snadno upravit na jednom místě:
+const int MARGIN_LEFT   = 16;  // Odsazení textu zleva (px) - dříve 40px pro starý kryt, nyní 16px pro plnou plochu
+const int MARGIN_RIGHT  = 16;  // Odsazení textu zprava (px)
+const int MARGIN_TOP    = 15;  // Odsazení shora (px)
+const int MARGIN_BOTTOM = 15;  // Odsazení zdola (px)
 
 // Pomocná funkce, která vrátí správný ukazatel na font podle nastavení
 const uint8_t* getActiveFont() {
     if (activeFontType == 0) {
+        // Sans-serif (moderní čisté písmo ve stylu Droid Sans / Helvetica s podporou CZ znaků)
         return (activeFontSize == 12) ? u8g2_font_helvR12_te : u8g2_font_helvR14_te;
     } else if (activeFontType == 1) {
+        // Book Serif (skvěle čitelné knižní patkové písmo ve stylu Droid Serif / Century Schoolbook)
+        return (activeFontSize == 12) ? u8g2_font_ncenR12_tr : u8g2_font_ncenR14_tr;
+    } else if (activeFontType == 2) {
+        // Times Roman (klasické patkové písmo)
         return (activeFontSize == 12) ? u8g2_font_timR12_tr : u8g2_font_timR14_tr;
     } else {
+        // Courier (strojopis / monospace)
         return (activeFontSize == 12) ? u8g2_font_courR12_tr : u8g2_font_courR14_tr;
     }
 }
@@ -297,7 +314,7 @@ void updateEpaperDisplay() {
             u8g2Fonts.print(("RAM volná: " + String(freeRAM) + " KB").c_str());
             
             u8g2Fonts.setCursor(col2, 245);
-            u8g2Fonts.print("CPU: ESP32-WROOM");
+            u8g2Fonts.print("CPU: e-paper ESP32 drive board rev3");
             uint32_t freeSD_MB = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
             u8g2Fonts.setCursor(col2, 265);
             u8g2Fonts.print(("SD volno: " + String(freeSD_MB) + " MB").c_str());
@@ -338,11 +355,18 @@ void updateEpaperDisplay() {
         } else if (currentState == STATE_LIBRARY) {
             u8g2Fonts.setFont(u8g2_font_helvB18_te); // Větší tučné pro nadpis knihovny
             u8g2Fonts.setCursor(20, 40);
-            u8g2Fonts.print("=== KNIHOVNA ===");
+            u8g2Fonts.print("=== KNIHOVNA (SD KARTA) ===");
             
             u8g2Fonts.setFont(u8g2_font_helvR14_te); // Střední písmo pro soubory
-            for (int i = 0; i < fileCount; i++) {
-                int yPos = 90 + (i * 35);
+            
+            // Výpočet stránkování seznamu knih (zobrazení max 10 na obrazovku)
+            int itemsPerPage = 10;
+            int windowStart = (selectedFileIndex / itemsPerPage) * itemsPerPage;
+            int windowEnd = windowStart + itemsPerPage;
+            if (windowEnd > fileCount) windowEnd = fileCount;
+            
+            for (int i = windowStart; i < windowEnd; i++) {
+                int yPos = 90 + ((i - windowStart) * 35);
                 u8g2Fonts.setCursor(40, yPos);
                 if (i == selectedFileIndex) {
                     u8g2Fonts.print("-> "); u8g2Fonts.print(fileList[i]); u8g2Fonts.print(" <-");
@@ -350,9 +374,19 @@ void updateEpaperDisplay() {
                     u8g2Fonts.print("   "); u8g2Fonts.print(fileList[i]);
                 }
             }
+            
             u8g2Fonts.setFont(u8g2_font_helvR12_te); // Menší pro nápovědu dole
             u8g2Fonts.setCursor(20, display.height() - 20);
             u8g2Fonts.print("[ Pravé tl. (dlouze) = Zpět | Levé tl. (dlouze) = Uspat ]");
+            
+            // Ukazatel stránek vpravo dole nad nápovědou
+            if (fileCount > itemsPerPage) {
+                u8g2Fonts.setCursor(display.width() - 100, display.height() - 40);
+                u8g2Fonts.print("Strana ");
+                u8g2Fonts.print((windowStart / itemsPerPage) + 1);
+                u8g2Fonts.print("/");
+                u8g2Fonts.print((fileCount + itemsPerPage - 1) / itemsPerPage);
+            }
         } else if (currentState == STATE_SYSTEM) {
             u8g2Fonts.setFont(u8g2_font_helvB18_te); // Větší tučné pro nadpis
             u8g2Fonts.setCursor(20, 40);
@@ -361,21 +395,22 @@ void updateEpaperDisplay() {
             u8g2Fonts.setFont(u8g2_font_helvR14_te);
             u8g2Fonts.setCursor(40, 90);
             
-            String fontName = "Neznamy";
-            if (activeFontType == 0) fontName = "Helvetica (Bezpatkove)";
-            else if (activeFontType == 1) fontName = "Times (Patkove)";
-            else if (activeFontType == 2) fontName = "Courier (Monospace)";
-            u8g2Fonts.print(("-> Pismo: " + fontName).c_str());
+            String fontName = "Neznámý";
+            if (activeFontType == 0) fontName = "Droid Sans / Helvetica (Bezpatkové)";
+            else if (activeFontType == 1) fontName = "Droid Serif / Schoolbook (Knižní patkové)";
+            else if (activeFontType == 2) fontName = "Times Roman (Patkové)";
+            else if (activeFontType == 3) fontName = "Courier (Monospace)";
+            u8g2Fonts.print(("-> Písmo: " + fontName).c_str());
 
             u8g2Fonts.setCursor(40, 130);
             u8g2Fonts.print(("-> Velikost: " + String(activeFontSize) + " px").c_str());
 
             u8g2Fonts.setCursor(40, 180);
-            u8g2Fonts.print("Nahled:");
+            u8g2Fonts.print("Náhled:");
             
             u8g2Fonts.setFont(getActiveFont());
             u8g2Fonts.setCursor(40, 210);
-            u8g2Fonts.print("Nepropadejte panice!");
+            u8g2Fonts.print("Příliš žluťoučký kůň úpěl ďábelské ódy.");
             
             u8g2Fonts.setFont(u8g2_font_helvR12_te); // Menší pro nápovědu dole
             u8g2Fonts.setCursor(20, display.height() - 40);
@@ -383,14 +418,26 @@ void updateEpaperDisplay() {
             u8g2Fonts.setCursor(20, display.height() - 20);
             u8g2Fonts.print("[ Pravé tl. (dlouze) = Zpět | Levé tl. (dlouze) = Uspat ]");
         } else if (currentState == STATE_READING) {
-            u8g2Fonts.setFont(u8g2_font_helvR12_te); 
+            u8g2Fonts.setFont(getActiveFont()); // Použije vybrané písmo a velikost pro čtení knihy! 
             
             if (!lookupMode) {
-                u8g2Fonts.setCursor(4, 15);
-                u8g2Fonts.print(currentPageText);
+                int startX = MARGIN_LEFT;
+                int startY = MARGIN_TOP;
+                int lineHeight = u8g2Fonts.getFontAscent() - u8g2Fonts.getFontDescent();
+                
+                int lineStart = 0;
+                for (unsigned int i = 0; i <= currentPageText.length(); i++) {
+                    if (i == currentPageText.length() || currentPageText[i] == '\n') {
+                        String line = currentPageText.substring(lineStart, i);
+                        u8g2Fonts.setCursor(startX, startY);
+                        u8g2Fonts.print(line);
+                        startY += lineHeight;
+                        lineStart = i + 1;
+                    }
+                }
             } else {
-                int x = 4;
-                int y = 15;
+                int x = MARGIN_LEFT;
+                int y = MARGIN_TOP;
                 int lineHeight = u8g2Fonts.getFontAscent() - u8g2Fonts.getFontDescent() + 4;
                 
                 int wordIdx = 0;
@@ -421,7 +468,7 @@ void updateEpaperDisplay() {
                             currentWord = "";
                         }
                         if (c == '\n') {
-                            x = 4;
+                            x = MARGIN_LEFT;
                             y += lineHeight;
                         }
                     } else {
@@ -431,9 +478,10 @@ void updateEpaperDisplay() {
                 
                 if (lookupResult != "") {
                     // Vykresleni velkeho okna s vysledkem z Wikipedie
-                    int boxW = display.width() - 40;
-                    int boxH = 140;
-                    int boxX = 20;
+                    int boxW = display.width() - (MARGIN_LEFT + MARGIN_RIGHT);
+                    int boxH = display.height() - 60; // Zvetsene okno pres vetsinu displeje
+                    if (boxH < 180) boxH = 180;
+                    int boxX = MARGIN_LEFT;
                     int boxY = (display.height() - boxH) / 2;
                     
                     display.fillRect(boxX, boxY, boxW, boxH, GxEPD_WHITE);
@@ -446,39 +494,90 @@ void updateEpaperDisplay() {
                     u8g2Fonts.print("Slovník (Wikipedia)");
                     
                     u8g2Fonts.setFont(u8g2_font_helvR12_te);
-                    String temp = "";
                     int textY = boxY + 45;
                     int textMaxWidth = boxW - 20;
+                    int maxTextY = boxY + boxH - 25; // Ochrana proti preteceni
                     
+                    int currentLine = 0;
+                    bool maxReached = false;
+                    String temp = "";
+                    String currentWord = "";
+
                     for (int i = 0; i <= lookupResult.length(); i++) {
                         char c = (i < lookupResult.length()) ? lookupResult[i] : ' ';
-                        if (c == ' ' || i == lookupResult.length()) {
-                            if (u8g2Fonts.getUTF8Width(temp.c_str()) > textMaxWidth) {
-                                int lastSpace = temp.lastIndexOf(' ');
-                                if (lastSpace > 0) {
-                                    String line = temp.substring(0, lastSpace);
-                                    u8g2Fonts.setCursor(boxX + 10, textY);
-                                    u8g2Fonts.print(line);
-                                    textY += 20;
-                                    temp = temp.substring(lastSpace + 1);
+                        
+                        if (c == ' ' || c == '\n' || i == lookupResult.length()) {
+                            String testLine = temp;
+                            if (temp.length() > 0 && currentWord.length() > 0) testLine += " ";
+                            testLine += currentWord;
+                            
+                            if (u8g2Fonts.getUTF8Width(testLine.c_str()) > textMaxWidth) {
+                                // Vytisknout radku
+                                if (currentLine >= lookupScrollOffset) {
+                                    if (textY < maxTextY) {
+                                        u8g2Fonts.setCursor(boxX + 10, textY);
+                                        u8g2Fonts.print(temp);
+                                        textY += 20;
+                                    } else {
+                                        maxReached = true;
+                                    }
                                 }
+                                currentLine++;
+                                temp = currentWord;
+                            } else {
+                                if (temp.length() > 0 && currentWord.length() > 0) temp += " ";
+                                temp += currentWord;
                             }
+                            currentWord = "";
+                            
+                            if (c == '\n') {
+                                if (currentLine >= lookupScrollOffset) {
+                                    if (textY < maxTextY) {
+                                        u8g2Fonts.setCursor(boxX + 10, textY);
+                                        u8g2Fonts.print(temp);
+                                        textY += 20;
+                                    } else {
+                                        maxReached = true;
+                                    }
+                                }
+                                currentLine++;
+                                temp = "";
+                            }
+                        } else {
+                            currentWord += c;
                         }
-                        if (i < lookupResult.length()) temp += c;
                     }
+                    
                     if (temp.length() > 0) {
-                        u8g2Fonts.setCursor(boxX + 10, textY);
-                        u8g2Fonts.print(temp);
+                        if (currentLine >= lookupScrollOffset && textY < maxTextY) {
+                            u8g2Fonts.setCursor(boxX + 10, textY);
+                            u8g2Fonts.print(temp);
+                        } else if (textY >= maxTextY) {
+                            maxReached = true;
+                        }
+                    }
+                    
+                    if (maxReached) {
+                        u8g2Fonts.setCursor(boxX + 10, maxTextY - 5);
+                        u8g2Fonts.print("...");
+                    }
+                    if (lookupScrollOffset > 0) {
+                        u8g2Fonts.setCursor(boxX + boxW - 20, boxY + 18);
+                        u8g2Fonts.print("^");
+                    }
+                    if (maxReached) {
+                        u8g2Fonts.setCursor(boxX + boxW - 20, boxY + boxH - 10);
+                        u8g2Fonts.print("v");
                     }
                     
                     u8g2Fonts.setFont(u8g2_font_helvR10_te);
                     u8g2Fonts.setCursor(boxX + 10, boxY + boxH - 10);
-                    u8g2Fonts.print("[Stisk pro zavřeni]");
+                    u8g2Fonts.print("[Stisk pro zavření]");
                     
                 } else {
                     display.fillRect(0, display.height() - 40, display.width(), 40, GxEPD_WHITE);
                     display.drawLine(0, display.height() - 40, display.width(), display.height() - 40, GxEPD_BLACK);
-                    u8g2Fonts.setCursor(4, display.height() - 15);
+                    u8g2Fonts.setCursor(MARGIN_LEFT, display.height() - 15);
                     u8g2Fonts.print("[Stisk Trackballu = Přeložit | Zpět = Zrušit]");
                 }
             }
@@ -496,9 +595,9 @@ void initSDCard() {
     // Ošetření stability: U spojení kablíky může být výchozí frekvence příliš vysoká.
     // Zkusíme inicializaci s max. rychlostí 4 MHz (nebo i 1 MHz, např. 1000000, pokud to bude stále zlobit)
     if (!SD.begin(SD_CS, sdSPI, 4000000)) {
-        Serial.println("Chyba: SD karta nenalezena, nebo ji nelze prečíst!");
+        Serial.println("Chyba: SD karta nenalezena, nebo ji nelze prečist!");
         if (PIN_RED != -1) digitalWrite(PIN_RED, HIGH); // Červená LED při chybě
-        currentPageText = "Chyba SD karty! Zkontrolujte:\n1. Zda je formát FAT32\n2. Zda jsou kablíky SCK=18, MISO=19, MOSI=23\n3. Zda je napajení 5V (dle modulu).";
+        currentPageText = "Chyba SD karty! Zkontrolujte:\n1. Zda je formát FAT32\n2. Zda jsou kabliky SCK=18, MISO=19, MOSI=23\n3. Zda je napajeni 5V (dle modulu).";
         currentState = STATE_READING;
         displayNeedsUpdate = true;
         return;
@@ -509,15 +608,15 @@ void initSDCard() {
 void loadBookmarks() {
     // Příklad formátu: "1984.txt=1500" (kde 1500 je aktuální bajt v textu knihy)
     if (!SD.exists("/bookmarks.txt")) {
-        Serial.println("Záložky neexistují. Čistá knihovna.");
+        Serial.println("Založky neexistuji. Čista knihovna.");
         return;
     }
     File file = SD.open("/bookmarks.txt", FILE_READ);
     if (!file) {
-        Serial.println("Nepovedlo se otevrit bookmarks.txt");
+        Serial.println("Nepovedlo se otevřit bookmarks.txt");
         return;
     }
-    Serial.println("Nacteny rozectene knihy:");
+    Serial.println("Načteny rozečtené knihy:");
     while (file.available()) {
         String line = file.readStringUntil('\n');
         line.trim();
@@ -535,14 +634,21 @@ void loadLibrary() {
         return;
     }
     File file = root.openNextFile();
-    while (file && fileCount < 10) {
+    while (file && fileCount < MAX_FILES) {
         if (!file.isDirectory()) {
             String name = file.name();
-            if (!name.startsWith(".") && (name.endsWith(".txt") || name.endsWith(".TXT"))) { // Pouze soubory .txt
+            // Odstranění úvodního lomítka (některé verze knihovny ESP32 SD ho vrací)
+            if (name.startsWith("/")) {
+                name = name.substring(1);
+            }
+            
+            // Ignorovat skryté soubory (např. macOS vytváří "._Soubor.txt")
+            if (!name.startsWith(".") && (name.endsWith(".txt") || name.endsWith(".TXT"))) { 
                 fileList[fileCount] = name;
                 fileCount++;
             }
         }
+        file.close(); // DŮLEŽITÉ: Uvolnění handle souboru, jinak ESP32 narazí na VFS limit
         file = root.openNextFile();
     }
     if (fileCount == 0) {
@@ -568,9 +674,9 @@ void preparePageText() {
     int lineHeight = u8g2Fonts.getFontAscent() - u8g2Fonts.getFontDescent(); 
     int spaceWidth = u8g2Fonts.getUTF8Width(" ");
     
-    int maxWidth = display.width() - 8;  // Odsazení od okrajů
-    // Zvětšíme využitelnou výšku displeje (začínáme na y=15, takže zbyde více místa dole)
-    int maxHeight = display.height() - 15;
+    int maxWidth = display.width() - (MARGIN_LEFT + MARGIN_RIGHT);  // Využitelná šířka podle nastavených okrajů
+    // Využitelná výška displeje
+    int maxHeight = display.height() - (MARGIN_TOP + MARGIN_BOTTOM);
     
     String currentWord = "";
     bool pageFull = false;
@@ -644,7 +750,7 @@ void pushHistory(uint32_t pos) {
 }
 
 void openFile(String filename, uint32_t startPos = 0) {
-    if (filename == "Chyba čtení SD!" || filename == "Žádné soubory na SD.") return;
+    if (filename == "Chyba čteni SD!" || filename == "Žádné soubory na SD.") return;
     
     currentFilename = filename;
     currentFilePos = startPos;
@@ -782,7 +888,7 @@ void loadBookmark() {
         currentState = STATE_READING;
         displayNeedsUpdate = true;
         fullUpdateNeeded = true;
-        Serial.println("Načtena poslední aktivní kniha: " + currentFilename);
+        Serial.println("Načtena posledni aktivni kniha: " + currentFilename);
         return;
     }
 }
@@ -824,7 +930,7 @@ void setupWiFi() {
             u8g2Fonts.setCursor(20, 130);
             u8g2Fonts.print("Otevři tuto adresu v prohlížeči na PC.");
             u8g2Fonts.setCursor(20, 160);
-            u8g2Fonts.print("Pro nahrání souborů přes web server.");
+            u8g2Fonts.print("Pro nahrání souboru přes web server.");
             u8g2Fonts.setCursor(20, 190);
             u8g2Fonts.print("OTA aktualizace jsou aktivní.");
         } else {
@@ -889,9 +995,13 @@ void setupWiFi() {
                 while(file){
                     if(!file.isDirectory()){
                         hasFiles = true;
-                        html += "<tr><td>" + String(file.name()) + "</td><td>" + String(file.size()) + "</td>";
-                        html += "<td><a href='/delete?f=" + String(file.name()) + "' class='btn btn-del' onclick=\"return confirm('Opravdu smazat " + String(file.name()) + "?');\">Smazat</a></td></tr>";
+                        String name = file.name();
+                        if (name.startsWith("/")) name = name.substring(1);
+                        
+                        html += "<tr><td>" + name + "</td><td>" + String(file.size()) + "</td>";
+                        html += "<td><a href='/delete?f=" + name + "' class='btn btn-del' onclick=\"return confirm('Opravdu smazat " + name + "?');\">Smazat</a></td></tr>";
                     }
+                    file.close(); // DŮLEŽITÉ: Zabránit vyčerpání limitu otevřených souborů!
                     file = root.openNextFile();
                 }
                 if (!hasFiles) {
@@ -926,7 +1036,7 @@ void setupWiFi() {
                 }
                 File uploadFile = SD.open(filePath, FILE_WRITE);
                 if (!uploadFile) {
-                    Serial.println("Nepodařilo se otevřít soubor pro zápis na SD!");
+                    Serial.println("Nepodařilo se otevřit soubor pro zápis na SD!");
                 } else {
                     uploadFile.close();
                 }
@@ -986,7 +1096,7 @@ void checkHardwareButtons() {
         } else if (!leftLongPressed && (millis() - leftPressStart >= LONG_PRESS_TIME)) {
             leftLongPressed = true;
             // AKCE: Dlouhý stisk levého -> vypnutí / zapnutí (Deep Sleep)
-            Serial.println("Dlouhý stisk levého tlačítka -> jdu spát.");
+            Serial.println("Dlouhý stisk levého tlačitka -> jdu spát.");
             goToDeepSleep();
         }
     } else {
@@ -1018,7 +1128,7 @@ void checkHardwareButtons() {
         } else if (!rightLongPressed && (millis() - rightPressStart >= LONG_PRESS_TIME)) {
             rightLongPressed = true;
             // AKCE: Dlouhý stisk pravého -> Zpět (Level up)
-            Serial.println("Dlouhý stisk pravého tlačítka -> Zpět.");
+            Serial.println("Dlouhý stisk pravého tlačitka -> Zpět.");
             resetActivityTimer();
             if (currentState == STATE_READING) {
                 if (lookupMode) {
@@ -1122,14 +1232,10 @@ void checkTrackball() {
     if (firstPulseTime > 0 && (millis() - firstPulseTime > 150)) {
         if (upPulses > downPulses) {
             up = true;
-            if (upPulses >= 4) jumpSteps = 3;
-            else if (upPulses >= 2) jumpSteps = 2;
-            else jumpSteps = 1;
+            jumpSteps = 1; // Vždy skáčeme jen o 1 položku
         } else if (downPulses > upPulses) {
             down = true;
-            if (downPulses >= 4) jumpSteps = 3;
-            else if (downPulses >= 2) jumpSteps = 2;
-            else jumpSteps = 1;
+            jumpSteps = 1; // Vždy skáčeme jen o 1 položku
         }
         
         // Reset akumulátorů
@@ -1232,51 +1338,61 @@ void checkTrackball() {
             }
         } else {
             // Režim slovníku
-            if (right) {
-                selectedWordIndex++; lookupResult = "";
-                displayNeedsUpdate = true; fullUpdateNeeded = false;
-            } else if (left) {
-                if (selectedWordIndex > 0) selectedWordIndex--; lookupResult = "";
-                displayNeedsUpdate = true; fullUpdateNeeded = false;
-            } else if (up) {
-                selectedWordIndex = max(0, selectedWordIndex - (8 * jumpSteps)); lookupResult = "";
-                displayNeedsUpdate = true; fullUpdateNeeded = false;
-            } else if (down) {
-                selectedWordIndex += (8 * jumpSteps); lookupResult = "";
-                displayNeedsUpdate = true; fullUpdateNeeded = false;
-            } else if (btn) {
-                if (lookupResult != "") {
+            if (lookupResult != "") {
+                if (btn) {
                     lookupMode = false;
                     lookupResult = "";
+                    lookupScrollOffset = 0;
                     displayNeedsUpdate = true; fullUpdateNeeded = true;
-                } else {
-                // Najít konkrétní slovo v textu podle indexu
-                int wordIdx = 0;
-                String selectedWord = "";
-                String currentWord = "";
-                for (int i = 0; i <= currentPageText.length(); i++) {
-                    char c = (i < currentPageText.length()) ? currentPageText[i] : ' ';
-                    if (c == ' ' || c == '\n' || i == currentPageText.length()) {
-                        if (currentWord.length() > 0) {
-                            if (wordIdx == selectedWordIndex) selectedWord = currentWord;
-                            wordIdx++;
-                            currentWord = "";
-                        }
-                    } else {
-                        currentWord += c;
-                    }
+                } else if (up) {
+                    lookupScrollOffset = max(0, lookupScrollOffset - (2 * jumpSteps));
+                    displayNeedsUpdate = true; fullUpdateNeeded = false;
+                } else if (down) {
+                    lookupScrollOffset += (2 * jumpSteps);
+                    displayNeedsUpdate = true; fullUpdateNeeded = false;
                 }
-                
-                lookupResult = lookupWord(selectedWord);
-                displayNeedsUpdate = true;
-                fullUpdateNeeded = false;
+            } else {
+                if (right) {
+                    selectedWordIndex++;
+                    displayNeedsUpdate = true; fullUpdateNeeded = false;
+                } else if (left) {
+                    if (selectedWordIndex > 0) selectedWordIndex--;
+                    displayNeedsUpdate = true; fullUpdateNeeded = false;
+                } else if (up) {
+                    selectedWordIndex = max(0, selectedWordIndex - (8 * jumpSteps));
+                    displayNeedsUpdate = true; fullUpdateNeeded = false;
+                } else if (down) {
+                    selectedWordIndex += (8 * jumpSteps);
+                    displayNeedsUpdate = true; fullUpdateNeeded = false;
+                } else if (btn) {
+                    // Najít konkrétní slovo v textu podle indexu
+                    int wordIdx = 0;
+                    String selectedWord = "";
+                    String currentWord = "";
+                    for (int i = 0; i <= currentPageText.length(); i++) {
+                        char c = (i < currentPageText.length()) ? currentPageText[i] : ' ';
+                        if (c == ' ' || c == '\n' || i == currentPageText.length()) {
+                            if (currentWord.length() > 0) {
+                                if (wordIdx == selectedWordIndex) selectedWord = currentWord;
+                                wordIdx++;
+                                currentWord = "";
+                            }
+                        } else {
+                            currentWord += c;
+                        }
+                    }
+                    
+                    lookupResult = lookupWord(selectedWord);
+                    lookupScrollOffset = 0;
+                    displayNeedsUpdate = true;
+                    fullUpdateNeeded = false;
                 }
             }
         }
     }
     else if (currentState == STATE_SYSTEM) {
         if (btn) {
-            activeFontType = (activeFontType + 1) % 3;
+            activeFontType = (activeFontType + 1) % 4;
             preparePageText();
             displayNeedsUpdate = true;
             fullUpdateNeeded = true;
@@ -1429,11 +1545,11 @@ void goToDeepSleep() {
         display.fillRect(0, display.height() - 40, display.width(), 40, GxEPD_WHITE);
         
         // Spodní informace
-        display.drawLine(10, display.height() - 40, display.width() - 10, display.height() - 40, GxEPD_BLACK);
-        display.drawLine(10, display.height() - 39, display.width() - 10, display.height() - 39, GxEPD_BLACK);
+        display.drawLine(MARGIN_LEFT, display.height() - 40, display.width() - MARGIN_RIGHT, display.height() - 40, GxEPD_BLACK);
+        display.drawLine(MARGIN_LEFT, display.height() - 39, display.width() - MARGIN_RIGHT, display.height() - 39, GxEPD_BLACK);
         
         u8g2Fonts.setFont(u8g2_font_helvB10_te);
-        u8g2Fonts.setCursor(15, display.height() - 15);
+        u8g2Fonts.setCursor(MARGIN_LEFT, display.height() - 15);
         if (currentState == STATE_READING) {
             u8g2Fonts.print("ZÁLOŽKA ULOŽENA");
         } else {
@@ -1441,7 +1557,7 @@ void goToDeepSleep() {
         }
         
         int uspanoWidth = u8g2Fonts.getUTF8Width("USPÁNO");
-        u8g2Fonts.setCursor(display.width() - uspanoWidth - 15, display.height() - 15);
+        u8g2Fonts.setCursor(display.width() - uspanoWidth - MARGIN_RIGHT, display.height() - 15);
         u8g2Fonts.print("USPÁNO");
 
     } while (display.nextPage());
@@ -1485,7 +1601,7 @@ void setup() {
     esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
     if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
         // Zařízení bylo probuzeno tlačítkem trackballu
-        Serial.println("Probuzeno tlačítkem z Deep Sleep!");
+        Serial.println("Probuzeno tlačitkem z Deep Sleep!");
     }
 
     initDisplay();
@@ -1515,7 +1631,7 @@ void loop() {
         if (PIN_RED != -1) digitalWrite(PIN_RED, LOW);
         digitalWrite(PIN_GRN, LOW);
         ledIsOn = false;
-        Serial.println("LED diody automaticky zhasnutý po 1 minute nečinnosti pro šetření energie.");
+        Serial.println("LED diody automaticky zhasnuty po 1 minute necinnosti pro setreni energii.");
     }
 
     // 3.5 Kontrola baterie (červená LED varování)
@@ -1598,17 +1714,46 @@ void connectWifiSafely() {
 // --- Online Slovník / Wikipedia API ---
 #include <HTTPClient.h>
 #include <ArduinoJson.h> // Pro parsování JSON odpovědi (instalovat přes správce)
+#include <WiFiClientSecure.h> // Nutné pro HTTPS spojení na Wikipedii
+
+
+// --- Pomocná funkce pro URL kódování (pro diakritiku) ---
+String urlEncode(String str) {
+    String encodedString = "";
+    for (int i = 0; i < str.length(); i++) {
+        unsigned char c = str.charAt(i);
+        if (isalnum(c)) {
+            encodedString += (char)c;
+        } else if (c == ' ') {
+            encodedString += "%20";
+        } else {
+            encodedString += '%';
+            if (c < 16) encodedString += '0';
+            String hexStr = String(c, HEX);
+            hexStr.toUpperCase();
+            encodedString += hexStr;
+        }
+    }
+    return encodedString;
+}
 
 String lookupWordWikipedia(String word) {
-    if(WiFi.status() != WL_CONNECTED) return "Definice nenalezena.";
+    if(WiFi.status() != WL_CONNECTED) return "Chyba: Wi-Fi odpojeno.";
 
+    WiFiClientSecure client;
+    client.setInsecure(); // Ignorovat SSL certifikáty (rychlé řešení pro ESP32 a HTTPS)
     HTTPClient http;
-    // URL Wikipedie pro stručný výtah hledaného slova (cs.wikipedia.org)
-    String url = "https://cs.wikipedia.org/api/rest_v1/page/summary/" + word;
     
-    http.begin(url);
+    // URL Wikipedie (pro norskou změňte 'cs.' na 'no.')
+    // Pomocí urlEncode() zakódujeme háčky a čárky, jinak API vrací 404
+    String url = "https://cs.wikipedia.org/api/rest_v1/page/summary/" + urlEncode(word);
+    
+    http.begin(client, url);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    http.setUserAgent("ESP32_EReader_Prototype/1.0");
+    
     int httpCode = http.GET();
-    String payload = "Definice nenalezena.";
+    String payload = "Slovo nenalezeno na Wikipedii.";
 
     if (httpCode == 200) {
         String response = http.getString();
@@ -1617,6 +1762,12 @@ String lookupWordWikipedia(String word) {
         JsonDocument doc;
         deserializeJson(doc, response);
         payload = doc["extract"].as<String>(); 
+    } else if (httpCode == 404) {
+        payload = "Slovo '" + word + "' neni na Wikipedii.";
+    } else if (httpCode > 0) {
+        payload = "Nenalezeno (HTTP " + String(httpCode) + ")";
+    } else {
+        payload = "Chyba HTTPS spojeni: " + http.errorToString(httpCode);
     }
     
     http.end();
