@@ -2,10 +2,10 @@
 // Koncept pro Arduino IDE
 
 // --- Nastavení Sítě a MQTT ---
-const char* WIFI_SSID = "Internet";
-const char* WIFI_PASS = "1234567890";
-const char* MQTT_USER = "mqtt";
-const char* MQTT_PASS = "admin";
+const char* WIFI_SSID = "xxx";
+const char* WIFI_PASS = "xxx";
+const char* MQTT_USER = "xxx";
+const char* MQTT_PASS = "xxx";
 
 #include <Arduino.h>
 #include <GxEPD2_BW.h>   // Knihovna pro e-paper (přímá podpora Waveshare)
