@@ -11,9 +11,9 @@
 #include <mbedtls/base64.h> // Knihovna pro převod zvuku pro Google API
 
 // --- NASTAVENÍ WI-FI A API ---
-const char* ssid = "Internet";
-const char* password = "1234567890";
-#define GOOGLE_API_KEY "AIzaSyAkOHUD1cBoUXCtWqJXONlRe0oD7DJaWQ4" // <--- ZDE VLOŽTE GOOGLE KLÍČ
+const char* ssid = "XXX";
+const char* password = "XXX";
+#define GOOGLE_API_KEY "XXX" // <--- ZDE VLOŽTE GOOGLE KLÍČ
 
 // --- PINY DISPLEJE (ESP32-S3) ---
 #define EPD_PWR  8
