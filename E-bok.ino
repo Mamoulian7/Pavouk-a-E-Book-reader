@@ -2,10 +2,10 @@
 // Koncept pro Arduino IDE
 
 // --- Nastavení Sítě a MQTT ---
-const char* WIFI_SSID = "xxx";
-const char* WIFI_PASS = "xxx";
-const char* MQTT_USER = "xxx";
-const char* MQTT_PASS = "xxx";
+const char* WIFI_SSID = "XXX";
+const char* WIFI_PASS = "XXX";
+const char* MQTT_USER = "XXX";
+const char* MQTT_PASS = "XXX";
 
 #include <Arduino.h>
 #include <GxEPD2_BW.h>   // Knihovna pro e-paper (přímá podpora Waveshare)
@@ -86,6 +86,8 @@ SPIClass sdSPI(VSPI);
 
 // --- Wi-Fi, OTA a WebServer ---
 #include <WiFi.h>
+#include <Preferences.h>
+Preferences prefs;
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
@@ -167,6 +169,8 @@ String currentText = "Zapínám čtečku...";
 
 int activeFontType = 0; // 0 = Sans (Droid Sans / Helvetica), 1 = Serif Book (Droid Serif / Century Schoolbook), 2 = Times, 3 = Monospace (Courier)
 int activeFontSize = 12; // 12 nebo 14 pixelů
+bool useNorwegianWiki = false;
+int systemMenuIndex = 0; // 0=Písmo, 1=Velikost, 2=Slovník
 
 // --- Nastavení okrajů displeje (Layout & Margins) ---
 // Pro nový 3D tištěný kryt s plně viditelnou plochou e-inku jsou okraje nastaveny na standardních 16px.
@@ -388,33 +392,44 @@ void updateEpaperDisplay() {
                 u8g2Fonts.print((fileCount + itemsPerPage - 1) / itemsPerPage);
             }
         } else if (currentState == STATE_SYSTEM) {
-            u8g2Fonts.setFont(u8g2_font_helvB18_te); // Větší tučné pro nadpis
+            u8g2Fonts.setFont(u8g2_font_helvB18_te);
             u8g2Fonts.setCursor(20, 40);
             u8g2Fonts.print("=== NASTAVENÍ ===");
             
             u8g2Fonts.setFont(u8g2_font_helvR14_te);
-            u8g2Fonts.setCursor(40, 90);
             
             String fontName = "Neznámý";
-            if (activeFontType == 0) fontName = "Droid Sans / Helvetica (Bezpatkové)";
-            else if (activeFontType == 1) fontName = "Droid Serif / Schoolbook (Knižní patkové)";
-            else if (activeFontType == 2) fontName = "Times Roman (Patkové)";
-            else if (activeFontType == 3) fontName = "Courier (Monospace)";
-            u8g2Fonts.print(("-> Písmo: " + fontName).c_str());
+            if (activeFontType == 0) fontName = "Droid Sans / Helvetica";
+            else if (activeFontType == 1) fontName = "Droid Serif / Book";
+            else if (activeFontType == 2) fontName = "Times Roman";
+            else if (activeFontType == 3) fontName = "Courier";
 
-            u8g2Fonts.setCursor(40, 130);
-            u8g2Fonts.print(("-> Velikost: " + String(activeFontSize) + " px").c_str());
+            u8g2Fonts.setCursor(20, 90);
+            u8g2Fonts.print(systemMenuIndex == 0 ? ">> Písmo: " : "   Písmo: ");
+            u8g2Fonts.print(fontName);
 
-            u8g2Fonts.setCursor(40, 180);
-            u8g2Fonts.print("Náhled:");
+            u8g2Fonts.setCursor(20, 130);
+            u8g2Fonts.print(systemMenuIndex == 1 ? ">> Velikost: " : "   Velikost: ");
+            u8g2Fonts.print((String(activeFontSize) + " px").c_str());
+            
+            u8g2Fonts.setCursor(20, 170);
+            u8g2Fonts.print(systemMenuIndex == 2 ? ">> Wikipedia: " : "   Wikipedia: ");
+            u8g2Fonts.print(useNorwegianWiki ? "Norská (no.wikipedia.org)" : "Česká (cs.wikipedia.org)");
+
+            u8g2Fonts.setCursor(40, 220);
+            u8g2Fonts.print("Náhled písma:");
             
             u8g2Fonts.setFont(getActiveFont());
-            u8g2Fonts.setCursor(40, 210);
-            u8g2Fonts.print("Příliš žluťoučký kůň úpěl ďábelské ódy.");
+            u8g2Fonts.setCursor(40, 260);
+            if (useNorwegianWiki) {
+                u8g2Fonts.print("Blåbærsyltetøy smaker godt.");
+            } else {
+                u8g2Fonts.print("Příliš žluťoučký kůň úpěl ďábelské ódy.");
+            }
             
-            u8g2Fonts.setFont(u8g2_font_helvR12_te); // Menší pro nápovědu dole
+            u8g2Fonts.setFont(u8g2_font_helvR12_te);
             u8g2Fonts.setCursor(20, display.height() - 40);
-            u8g2Fonts.print("[ Klik = Změň písmo | L/P trackball = Změň velikost ]");
+            u8g2Fonts.print("[Nahoru/Dolů = Výběr | L/P/Klik = Změnit]");
             u8g2Fonts.setCursor(20, display.height() - 20);
             u8g2Fonts.print("[ Pravé tl. (dlouze) = Zpět | Levé tl. (dlouze) = Uspat ]");
         } else if (currentState == STATE_READING) {
@@ -978,68 +993,194 @@ void setupWiFi() {
         ArduinoOTA.begin();
 
         // Setup WebServer
-        server.on("/", HTTP_GET, []() {
-            server.sendHeader("Connection", "close");
-            String html = "<html><head><meta charset='utf-8'><title>ESP32 E-Reader Správce</title>";
-            html += "<style>body{font-family:sans-serif;max-width:800px;margin:2rem auto;padding:1rem;background:#f4f4f5;color:#333;} .box{background:#fff;padding:2rem;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);} th, td{text-align:left;padding:12px;border-bottom:1px solid #ddd;} table{width:100%;border-collapse:collapse;} .btn{padding:8px 16px;background:#3b82f6;color:white;text-decoration:none;border-radius:4px;border:none;cursor:pointer;font-weight:bold;} .btn-del{background:#ef4444;font-size:12px;padding:6px 12px;}</style></head><body>";
-            html += "<div class='box'><h2>Správce souborů (SD Karta)</h2>";
-            html += "<form method='POST' action='/upload' enctype='multipart/form-data' style='margin-bottom:20px;padding:15px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;'><input type='file' name='upload' required style='margin-right:10px;'><input type='submit' value='Nahrát na SD' class='btn'></form>";
-            html += "<table><tr><th>Název souboru</th><th>Velikost (B)</th><th>Akce</th></tr>";
+        // --- Web UI ---
+        const char* htmlTop = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>E-Bok Správce Knihovny</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h2 { margin-top: 0; color: #1a73e8; border-bottom: 2px solid #e8f0fe; padding-bottom: 15px;}
+        .drop-zone { border: 2px dashed #1a73e8; border-radius: 12px; padding: 50px 20px; text-align: center; cursor: pointer; transition: all 0.3s ease; margin-bottom: 20px; background: #f8fbff; }
+        .drop-zone:hover, .drop-zone.dragover { background: #e8f0fe; border-color: #1557b0; }
+        .drop-zone p { margin: 0; font-size: 16px; color: #1a73e8; }
+        .drop-zone small { display: block; margin-top: 10px; color: #5f6368; font-size: 13px;}
+        .file-list { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        .file-list th, .file-list td { padding: 15px; text-align: left; border-bottom: 1px solid #eee; vertical-align: middle; }
+        .file-list th { background: #f8f9fa; font-weight: 600; color: #444; border-radius: 4px; }
+        .btn { padding: 8px 14px; border: none; border-radius: 6px; cursor: pointer; text-decoration: none; color: #fff; font-size: 14px; font-weight: 500; margin-right: 5px; display: inline-block; transition: background 0.2s;}
+        .btn-down { background: #34a853; }
+        .btn-down:hover { background: #2d8f47; }
+        .btn-del { background: #ea4335; }
+        .btn-del:hover { background: #ce3a2e; }
+        .thumb { max-width: 60px; max-height: 80px; border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); object-fit: cover; }
+        .no-thumb { display: inline-block; width: 60px; height: 80px; background: #f1f3f4; border-radius: 4px; line-height: 80px; text-align: center; font-size: 14px; color: #9aa0a6; font-weight: bold; border: 1px solid #e8eaed; }
+        #progress-container { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+        .progress-item { font-size: 14px; color: #3c4043; background: #e8f0fe; padding: 10px 15px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; border: 1px solid #d2e3fc; }
+        .stat-ok { color: #188038; font-weight: bold; }
+        .stat-err { color: #d93025; font-weight: bold; }
+        .stat-wait { color: #1a73e8; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>📚 Správce Knihovny E-Bok</h2>
+        <div id="drop-zone" class="drop-zone">
+            <p><strong>Klikněte zde nebo sem přetáhněte knihy (.txt) a obálky (.jpg)</strong></p>
+            <small>Můžete vybrat více souborů najednou.<br>Obal se musí jmenovat stejně jako kniha (např. <b>Kniha.txt</b> a <b>Kniha.jpg</b>)<br>Obrázky musí být v základním JPG formátu (max ~600x800px).</small>
+            <input type="file" id="file-input" multiple style="display:none;">
+        </div>
+        <div id="progress-container"></div>
+        
+        <table class="file-list">
+            <thead><tr><th>Náhled</th><th>Název souboru</th><th>Velikost</th><th>Akce</th></tr></thead>
+            <tbody>
+)rawliteral";
+
+        const char* htmlBottom = R"rawliteral(
+            </tbody>
+        </table>
+    </div>
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const progress = document.getElementById('progress-container');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            uploadFiles(e.dataTransfer.files);
+        });
+        fileInput.addEventListener('change', () => uploadFiles(fileInput.files));
+
+        async function uploadFiles(files) {
+            for (let i = 0; i < files.length; i++) {
+                let file = files[i];
+                let p = document.createElement('div');
+                p.className = 'progress-item';
+                p.innerHTML = `<span>Nahrávám: <b>${file.name}</b></span> <span id="stat-${i}" class="stat-wait">Čekám...</span>`;
+                progress.appendChild(p);
+                
+                let formData = new FormData();
+                formData.append('upload', file);
+                
+                try {
+                    document.getElementById(`stat-${i}`).innerText = "Nahrávám...";
+                    let response = await fetch('/upload', { method: 'POST', body: formData });
+                    if(response.ok) {
+                        document.getElementById(`stat-${i}`).innerText = "HOTOVO";
+                        document.getElementById(`stat-${i}`).className = "stat-ok";
+                    } else {
+                        document.getElementById(`stat-${i}`).innerText = "CHYBA";
+                        document.getElementById(`stat-${i}`).className = "stat-err";
+                    }
+                } catch (e) {
+                    document.getElementById(`stat-${i}`).innerText = "CHYBA SPOJENÍ";
+                    document.getElementById(`stat-${i}`).className = "stat-err";
+                }
+            }
+            let p = document.createElement('div');
+            p.className = 'progress-item';
+            p.innerHTML = "<b>Vše nahráno! Aktualizuji stránku...</b>";
+            progress.appendChild(p);
+            setTimeout(() => window.location.reload(), 1500);
+        }
+    </script>
+</body>
+</html>
+)rawliteral";
+
+        server.on("/", HTTP_GET, [htmlTop, htmlBottom]() {
+            server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+            server.send(200, "text/html", "");
+            server.sendContent(htmlTop);
 
             File root = SD.open("/");
-            if(!root){
-                html += "<tr><td colspan='3'>Chyba čtení SD karty (nebo prázdná karta).</td></tr>";
+            if (!root) {
+                server.sendContent("<tr><td colspan='4'>Chyba čtení SD karty.</td></tr>");
             } else {
                 File file = root.openNextFile();
                 bool hasFiles = false;
-                while(file){
-                    if(!file.isDirectory()){
-                        hasFiles = true;
+                while (file) {
+                    if (!file.isDirectory()) {
                         String name = file.name();
                         if (name.startsWith("/")) name = name.substring(1);
                         
-                        html += "<tr><td>" + name + "</td><td>" + String(file.size()) + "</td>";
-                        html += "<td><a href='/delete?f=" + name + "' class='btn btn-del' onclick=\"return confirm('Opravdu smazat " + name + "?');\">Smazat</a></td></tr>";
+                        // Ignorujeme systémové soubory (ty začínající na tečku nebo mající .pos příponu)
+                        if (!name.startsWith(".") && !name.endsWith(".pos")) {
+                            hasFiles = true;
+                            String thumbHtml = "<div class='no-thumb'>?</div>";
+                            
+                            if (name.endsWith(".txt") || name.endsWith(".TXT")) {
+                                String jpgName = name.substring(0, name.length() - 4) + ".jpg";
+                                if (SD.exists("/" + jpgName)) {
+                                    thumbHtml = "<img src='/file?n=" + jpgName + "' class='thumb'>";
+                                } else {
+                                    thumbHtml = "<div class='no-thumb'>TXT</div>";
+                                }
+                            } else if (name.endsWith(".jpg") || name.endsWith(".JPG")) {
+                                thumbHtml = "<img src='/file?n=" + name + "' class='thumb'>";
+                            }
+
+                            String row = "<tr><td>" + thumbHtml + "</td><td>" + name + "</td><td>" + String(file.size() / 1024) + " KB</td>";
+                            row += "<td><a href='/file?n=" + name + "' class='btn btn-down' target='_blank'>Stáhnout</a>";
+                            row += "<a href='/delete?f=" + name + "' class='btn btn-del' onclick=\"return confirm('Opravdu smazat " + name + "?');\">Smazat</a></td></tr>";
+                            server.sendContent(row);
+                        }
                     }
-                    file.close(); // DŮLEŽITÉ: Zabránit vyčerpání limitu otevřených souborů!
+                    file.close();
                     file = root.openNextFile();
                 }
                 if (!hasFiles) {
-                     html += "<tr><td colspan='3'>Žádné soubory nenalezeny.</td></tr>";
+                    server.sendContent("<tr><td colspan='4'>Žádné knihy nenalezeny.</td></tr>");
                 }
             }
-            html += "</table></div></body></html>";
-            server.send(200, "text/html", html);
+            server.sendContent(htmlBottom);
+            server.sendContent(""); // Konec HTTP Chunked odpovědi
+        });
+
+        server.on("/file", HTTP_GET, []() {
+            if (server.hasArg("n")) {
+                String filename = "/" + server.arg("n");
+                if (SD.exists(filename)) {
+                    File f = SD.open(filename, FILE_READ);
+                    String contentType = "application/octet-stream";
+                    if (filename.endsWith(".jpg") || filename.endsWith(".JPG")) contentType = "image/jpeg";
+                    else if (filename.endsWith(".txt") || filename.endsWith(".TXT")) contentType = "text/plain; charset=utf-8";
+                    
+                    server.streamFile(f, contentType);
+                    f.close();
+                    return;
+                }
+            }
+            server.send(404, "text/plain", "Soubor nenalezen");
         });
 
         server.on("/delete", HTTP_GET, []() {
-            if(server.hasArg("f")){
+            if (server.hasArg("f")) {
                 String filename = "/" + server.arg("f");
-                if(SD.exists(filename)){
-                    SD.remove(filename);
-                }
+                if (SD.exists(filename)) SD.remove(filename);
             }
             server.sendHeader("Location", "/");
             server.send(303);
         });
         
         server.on("/upload", HTTP_POST, []() {
-            server.sendHeader("Connection", "close");
-            server.send(200, "text/html", "<html><head><meta charset='utf-8'><title>Upload OK</title></head><body><h2>Soubor nahran!</h2><a href='/'>Zpet</a></body></html>");
+            server.send(200, "text/plain", "OK");
         }, []() {
             HTTPUpload& upload = server.upload();
             if (upload.status == UPLOAD_FILE_START) {
-                Serial.printf("Upload Name: %s\n", upload.filename.c_str());
                 String filePath = "/" + upload.filename;
-                if(SD.exists(filePath)) {
-                    SD.remove(filePath);
-                }
+                if(SD.exists(filePath)) SD.remove(filePath);
                 File uploadFile = SD.open(filePath, FILE_WRITE);
-                if (!uploadFile) {
-                    Serial.println("Nepodařilo se otevřit soubor pro zápis na SD!");
-                } else {
-                    uploadFile.close();
-                }
+                if (uploadFile) uploadFile.close();
             } else if (upload.status == UPLOAD_FILE_WRITE) {
                 String filePath = "/" + upload.filename;
                 File uploadFile = SD.open(filePath, FILE_APPEND);
@@ -1047,8 +1188,6 @@ void setupWiFi() {
                     uploadFile.write(upload.buf, upload.currentSize);
                     uploadFile.close();
                 }
-            } else if (upload.status == UPLOAD_FILE_END) {
-                Serial.printf("Upload Size: %u\n", upload.totalSize);
             }
         });
 
@@ -1082,6 +1221,7 @@ void checkHardwareButtons() {
     static bool rightLongPressed = false;
 
     const unsigned long LONG_PRESS_TIME = 1000; // 1 sekunda pro dlouhý stisk
+    const unsigned long DEBOUNCE_TIME = 50;     // 50 ms pro potlačení zákmitů (debounce)
 
     int currentLeft = digitalRead(BTN_LEFT);
     int currentRight = digitalRead(BTN_RIGHT);
@@ -1102,10 +1242,16 @@ void checkHardwareButtons() {
     } else {
         if (leftIsPressed) {
             leftIsPressed = false;
-            if (!leftLongPressed) {
+            // Debounce: akce se provede jen pokud bylo tlačítko stisknuto aspoň 50 ms
+            if (!leftLongPressed && (millis() - leftPressStart > DEBOUNCE_TIME)) {
                 // Krátký stisk: Strana zpět
                 resetActivityTimer();
                 if (currentState == STATE_READING) {
+                    // Dynamické obnovení historie (např. po probuzení)
+                    if (pageHistoryCount == 0 && currentFilePos > 0) {
+                        rebuildHistory(currentFilePos);
+                    }
+                    
                     if (pageHistoryCount > 0) {
                         pageHistoryCount--;
                         currentFilePos = pageHistory[pageHistoryCount];
@@ -1155,7 +1301,8 @@ void checkHardwareButtons() {
     } else {
         if (rightIsPressed) {
             rightIsPressed = false;
-            if (!rightLongPressed) {
+            // Debounce
+            if (!rightLongPressed && (millis() - rightPressStart > DEBOUNCE_TIME)) {
                 // Krátký stisk: Strana vpřed
                 resetActivityTimer();
                 if (currentState == STATE_READING) {
@@ -1391,21 +1538,29 @@ void checkTrackball() {
         }
     }
     else if (currentState == STATE_SYSTEM) {
-        if (btn) {
-            activeFontType = (activeFontType + 1) % 4;
+        if (up) {
+            systemMenuIndex--;
+            if (systemMenuIndex < 0) systemMenuIndex = 2;
+            displayNeedsUpdate = true; fullUpdateNeeded = false;
+        } else if (down) {
+            systemMenuIndex++;
+            if (systemMenuIndex > 2) systemMenuIndex = 0;
+            displayNeedsUpdate = true; fullUpdateNeeded = false;
+        } else if (left || right || btn) {
+            if (systemMenuIndex == 0) {
+                if (left) activeFontType = (activeFontType + 3) % 4;
+                else activeFontType = (activeFontType + 1) % 4;
+                prefs.putInt("fontType", activeFontType);
+            } else if (systemMenuIndex == 1) {
+                activeFontSize = (activeFontSize == 12) ? 14 : 12;
+                prefs.putInt("fontSize", activeFontSize);
+            } else if (systemMenuIndex == 2) {
+                useNorwegianWiki = !useNorwegianWiki;
+                prefs.putBool("noWiki", useNorwegianWiki);
+            }
             preparePageText();
             displayNeedsUpdate = true;
-            fullUpdateNeeded = true;
-        } else if (left || up) {
-            activeFontSize = 12;
-            preparePageText();
-            displayNeedsUpdate = true;
-            fullUpdateNeeded = true;
-        } else if (right || down) {
-            activeFontSize = 14;
-            preparePageText();
-            displayNeedsUpdate = true;
-            fullUpdateNeeded = true;
+            fullUpdateNeeded = false;
         }
     }
 }
@@ -1431,7 +1586,50 @@ bool tjpg_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap)
 }
 
 // --- Rychlé listování ---
+
+void rebuildHistory(uint32_t targetPos) {
+    if (targetPos == 0) {
+        pageHistoryCount = 0;
+        return;
+    }
+    
+    uint32_t startScan = (targetPos > 4000) ? targetPos - 4000 : 0;
+    if (startScan > 0) {
+        File f = SD.open("/" + currentFilename);
+        if (f) {
+            f.seek(startScan);
+            while (f.available() && startScan < targetPos) {
+                char c = f.read();
+                startScan++;
+                if (c == '\n') break;
+            }
+            f.close();
+        }
+    }
+    
+    uint32_t savedFilePos = currentFilePos;
+    String savedText = currentPageText;
+    
+    currentFilePos = startScan;
+    pageHistoryCount = 0;
+    
+    while (currentFilePos < targetPos) {
+        pushHistory(currentFilePos);
+        preparePageText();
+        if (nextFilePos <= currentFilePos) break;
+        currentFilePos = nextFilePos;
+    }
+    
+    currentFilePos = savedFilePos;
+    currentPageText = savedText;
+}
+
 void skipPages(int numPages) {
+    // Dynamické obnovení historie, pokud chybí
+    if (numPages < 0 && pageHistoryCount == 0 && currentFilePos > 0) {
+        rebuildHistory(currentFilePos);
+    }
+
     if (numPages > 0) {
         for (int i = 0; i < numPages; i++) {
             pushHistory(currentFilePos);
@@ -1572,6 +1770,11 @@ void goToDeepSleep() {
 }
 
 void setup() {
+    prefs.begin("ebook", false);
+    activeFontType = prefs.getInt("fontType", 0);
+    activeFontSize = prefs.getInt("fontSize", 12);
+    useNorwegianWiki = prefs.getBool("noWiki", false);
+    
     // Sériový monitor je zpět! TX a RX (Piny 1 a 3) jsou volné.
     Serial.begin(115200);
     
@@ -1744,9 +1947,9 @@ String lookupWordWikipedia(String word) {
     client.setInsecure(); // Ignorovat SSL certifikáty (rychlé řešení pro ESP32 a HTTPS)
     HTTPClient http;
     
-    // URL Wikipedie (pro norskou změňte 'cs.' na 'no.')
-    // Pomocí urlEncode() zakódujeme háčky a čárky, jinak API vrací 404
-    String url = "https://cs.wikipedia.org/api/rest_v1/page/summary/" + urlEncode(word);
+    // URL Wikipedie podle nastavení
+    String lang = useNorwegianWiki ? "no" : "cs";
+    String url = "https://" + lang + ".wikipedia.org/api/rest_v1/page/summary/" + urlEncode(word);
     
     http.begin(client, url);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
