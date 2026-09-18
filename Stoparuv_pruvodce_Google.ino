@@ -451,7 +451,7 @@ void initI2S() {
 // Deklarace funkcí
 void drawHomeScreen();
 void fetchAndDrawRandomArticle();
-void recordAndSearch();
+void AndSearch();
 void drawCurrentArticlePage();
 void drawErrorScreen(String title, String message);
 void fetchAndDrawSearchArticle(String query);
@@ -535,18 +535,18 @@ void loop() {
 }
 
 void connectWiFi() {
-  Serial.print("Pripojovani k siti...");
+  Serial.print("Připojování k síti...");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nPripojeno!");
+  Serial.println("\nPřipojeno!");
 }
 
 void checkWiFiConnection() {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Obnovuji Wi-Fi spojeni...");
+    Serial.println("Obnovuji Wi-Fi spojení...");
     connectWiFi();
   }
 }
@@ -570,7 +570,7 @@ void fetchAndDrawSearchArticle(String query) {
   
   if (httpCode != HTTP_CODE_OK) {
     soundError();
-    drawErrorScreen("Chyba spojeni", "Galakticka databaze neodpovida.");
+    drawErrorScreen("Chyba spojení", "Galaktická databáze neodpovídá.");
     isReadingArticle = false;
     return;
   }
@@ -583,7 +583,7 @@ void fetchAndDrawSearchArticle(String query) {
 
   if (error) {
     soundError();
-    drawErrorScreen("Chyba dat", "Data byla znicena v hyperprostoru.");
+    drawErrorScreen("Chyba dat", "Data byla zničena v hyperprostoru.");
     isReadingArticle = false;
     return;
   }
@@ -600,13 +600,13 @@ void fetchAndDrawSearchArticle(String query) {
 
   if (currentTitle == "") {
      soundError();
-     drawErrorScreen("Nenalezeno", "Ve vesmiru o tomto nevime absolutne nic.");
+     drawErrorScreen("Nenalezeno", "Ve vesmíru o tomto nevíme absolutne nic.");
      isReadingArticle = false;
      return;
   }
 
   if (currentText.length() == 0) {
-     currentText = "Heslo sice existuje, ale neobsahuje zadny text.";
+     currentText = "Heslo sice existuje, ale neobsahuje žádný text.";
   }
 
   currentPage = 0;
@@ -615,39 +615,50 @@ void fetchAndDrawSearchArticle(String query) {
 }
 
 void recordAndSearch() {
+  // 1. Překreslíme displej (tlačítko už nemusíte držet)
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
     u8g2Fonts.setForegroundColor(GxEPD_BLACK);
     u8g2Fonts.setFont(u8g2_font_helvB18_te);
     u8g2Fonts.setCursor(30, 200);
-    u8g2Fonts.print("Mluvte ted...");
+    u8g2Fonts.print("Mluvte po pípnutí...");
   } while (display.nextPage());
 
-  soundRecordStart();
-
-  int maxSamples = 16000 * 5; 
+  // 2. Nastavení délky nahrávání: 4 sekundy na název hesla bohatě stačí
+  // (pokud byste chtěl víc času, stačí změnit číslo 4 např. na 5)
+  const int RECORD_SECONDS = 4; 
+  int maxSamples = 16000 * RECORD_SECONDS; 
+  
   int16_t* audioBuffer = (int16_t*)ps_malloc(maxSamples * 2);
   if (!audioBuffer) audioBuffer = (int16_t*)malloc(maxSamples * 2);
   
   if (!audioBuffer) {
     soundError();
-    drawErrorScreen("Chyba pameti", "Zkontrolujte nastaveni OPI PSRAM.");
+    drawErrorScreen("Chyba paměti", "Zkontrolujte nastavení OPI PSRAM.");
     return;
   }
 
-  int sampleCount = 0;
+  // 3. Vyčistíme stará data a šum z mikrofonu těsně před nahráváním
   size_t bytesRead;
   int32_t rawSample = 0;
-  
-  i2s_read(I2S_NUM_0, &rawSample, 4, &bytesRead, 100); // Vyčištění bufferu
+  for (int i = 0; i < 50; i++) {
+    i2s_read(I2S_NUM_0, &rawSample, 4, &bytesRead, 10);
+  }
 
-  while (digitalRead(BTN_SEARCH) == HIGH && sampleCount < maxSamples) {
+  // 4. První pípnutí – signál: TEĎ MLUVTE!
+  soundRecordStart();
+
+  int sampleCount = 0;
+
+  // 5. Nahráváme automaticky po nastavenou dobu (RECORD_SECONDS)
+  while (sampleCount < maxSamples) {
     i2s_read(I2S_NUM_0, &rawSample, 4, &bytesRead, portMAX_DELAY);
     rawSample >>= 14; 
     audioBuffer[sampleCount++] = (int16_t)rawSample;
   }
 
+  // 6. Druhé pípnutí – signál: KONEC NAHRÁVÁNÍ
   soundRecordStop();
 
   display.firstPage();
@@ -659,12 +670,12 @@ void recordAndSearch() {
 
   checkWiFiConnection();
 
-  Serial.printf("\n--- DIAGNOSTIKA PAMETI ---\n");
-  Serial.printf("Volna interni RAM: %d\n", ESP.getFreeHeap());
-  Serial.printf("Volna PSRAM: %d\n", ESP.getFreePsram());
+  Serial.printf("\n--- DIAGNOSTIKA PAMĚTI ---\n");
+  Serial.printf("Volná interní RAM: %d\n", ESP.getFreeHeap());
+  Serial.printf("Volná PSRAM: %d\n", ESP.getFreePsram());
   
   // --- GOOGLE CLOUD SPEECH-TO-TEXT ---
-  Serial.println("Pripravuji data pro Google API...");
+  Serial.println("Připravuji data pro Google API...");
   
   size_t audioSize = sampleCount * 2;
   size_t b64Size = 0;
@@ -674,7 +685,7 @@ void recordAndSearch() {
   if (!b64Buffer) {
     free(audioBuffer);
     Serial.println("CHYBA: Nedostatek PSRAM pro Base64 buffer!");
-    drawErrorScreen("Chyba pameti", "Nelze alokovat pamet pro Base64.");
+    drawErrorScreen("Chyba paměti", "Nelze alokovat pamět pro Base64.");
     return;
   }
   
@@ -686,12 +697,12 @@ void recordAndSearch() {
   jsonPayload += String(b64Buffer);
   jsonPayload += "\"}}";
   
-  free(b64Buffer); // Uvolníme Base64 text co nejdříve
+  free(b64Buffer);
   
-  Serial.println("Odesilam na Google Cloud pres HTTPClient...");
+  Serial.println("Odesílám na Google Cloud přes HTTPClient...");
   
   WiFiClientSecure client;
-  client.setInsecure(); // Přeskočení kontroly certifikátu
+  client.setInsecure();
   
   HTTPClient http;
   http.setTimeout(25000); 
@@ -705,7 +716,7 @@ void recordAndSearch() {
     
     if (httpResponseCode > 0) {
       String responseBody = http.getString();
-      Serial.println("--- ODPOVED Z GOOGLE API ---");
+      Serial.println("--- ODPOVĚĎ Z GOOGLE API ---");
       Serial.println(responseBody);
       
       JsonDocument doc;
@@ -719,29 +730,29 @@ void recordAndSearch() {
       
       if (query == "") {
         soundError();
-        Serial.println("Chyba: Google API nevratilo zadny text (nebo nebylo nic rozpozano).");
-        drawErrorScreen("Nerozumim", "Zkuste mluvit bliz k mikrofonu.");
+        Serial.println("Chyba: Google API nevrátilo žádný text.");
+        drawErrorScreen("Nerozumím", "Zkuste mluvit blíž k mikrofonu.");
         http.end();
         return;
       }
 
-      Serial.println("Hledam heslo: " + query);
+      Serial.println("Hledám heslo: " + query);
       display.firstPage();
       do {
         display.fillScreen(GxEPD_WHITE);
         u8g2Fonts.setCursor(30, 200);
-        u8g2Fonts.print("Hledam: " + query);
+        u8g2Fonts.print("Hledám: " + query);
       } while (display.nextPage());
 
       fetchAndDrawSearchArticle(query);
     } else {
-      Serial.printf("Chyba POST pozadavku: %d - %s\n", httpResponseCode, http.errorToString(httpResponseCode).c_str());
-      drawErrorScreen("Chyba spojeni", "Chyba HTTP: " + http.errorToString(httpResponseCode));
+      Serial.printf("Chyba POST požadavku: %d - %s\n", httpResponseCode, http.errorToString(httpResponseCode).c_str());
+      drawErrorScreen("Chyba spojení", "Chyba HTTP: " + http.errorToString(httpResponseCode));
     }
     http.end();
   } else {
-    Serial.println("Nelze navazat SSL spojeni s Google API.");
-    drawErrorScreen("Chyba site", "SSL spojeni selhalo.");
+    Serial.println("Nelze navázat SSL spojení s Google API.");
+    drawErrorScreen("Chyba síte", "SSL spojení selhalo.");
   }
 }
 
@@ -915,10 +926,10 @@ void drawHomeScreen() {
     u8g2Fonts.setFont(u8g2_font_helvB12_te);
     
     u8g2Fonts.setCursor(35, 290);
-    u8g2Fonts.print("SET / DOPRAVA: Náhoda");
+    u8g2Fonts.print("DOPRAVA: Nepravd. pohon");
     
     u8g2Fonts.setCursor(35, 330);
-    u8g2Fonts.print("MID: Hledat (Mikrofon)");
+    u8g2Fonts.print("STISK: Hledat");
     
     u8g2Fonts.setCursor(35, 370);
     u8g2Fonts.print("NAHORU / DOLŮ: Čtení textu");
